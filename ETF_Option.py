@@ -11,7 +11,7 @@ import matplotlib.font_manager as fm
 import matplotlib.dates as mdates
 import seaborn as sns
 import re
-
+from DailyPortfolio import DailyPortfolio_Generator
 
 LoginUtils.set_auth_info(
         username='intern1',
@@ -71,77 +71,20 @@ for res_df in price_dict.values():
 
 # 将这些日期合并到一个列表中
 tradingday = sorted(list(all_dates))
+
 print(tradingday)
 total_portfolio = {}
 total_comm_var_diff = pd.DataFrame(columns = ['合约编码','操作误差'])
 holding_diff = pd.DataFrame()
 pnl_total = pd.DataFrame()
-for i, date in enumerate(tqdm(tradingday)):
-     # 检查是不是第一天，如果是的话创立一个空Daily Portfolio，如果不是则copy昨天的DailyPortfolio
-    if date == tradingday[0]:
-        total_portfolio[date] = DailyPortfolio(date, initial_cash, price_dict)
-    else:
-        previous_date = tradingday[i-1]
-        previous_portfolio = total_portfolio[previous_date]
-        new_portfolio = DailyPortfolio(date, previous_portfolio.cash, price_dict)
-        new_portfolio.holdings = previous_portfolio.holdings.copy()
-        new_portfolio.total_assets = previous_portfolio.total_assets    
-        total_portfolio[date] = new_portfolio
-    # 检查该交易日有没有在comm_df中出现，如果有的话识别是买/卖，没有的话正常更新
-    if date in trading_data['成交日期'].values:
-        transcations = trading_data[trading_data['成交日期'] == date]
-        # 保存历史总资产
-        total_portfolio[date].yesterday_total_assets = total_portfolio[date].total_assets
-        for contract_name in total_portfolio[date].holdings['合约编码']:
-            # 直接调用 update_holding 函数，这里data通过合约名字contract加入新的名字
-            data = {'合约编码': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约编码'].values[0],
-                    #'合约': contract_name,
-                    '合约名称': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约名称'].values[0],
-                    '成交数量': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '成交数量'].values[0],
-                    '收盘价': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '收盘价'].values[0],
-                    '合约乘数': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约乘数'].values[0]}
-            total_portfolio[date].update_holding(data)    
-        # print(f"日期{date}的交易记录：\n{transcations}")
-        for _, transcation in transcations.iterrows():
-            if transcation['备注'] == '买入开仓':
-                total_portfolio[date].buy_holding_open(transcation)
-            elif transcation['备注'] == '卖出开仓':
-                total_portfolio[date].sell_holding_open(transcation)
-            elif transcation['备注'] == '买入平仓':
-                total_portfolio[date].buy_holding_close(transcation)
-            elif transcation['备注'] == '卖出平仓':
-                total_portfolio[date].sell_holding_close(transcation)
-        total_portfolio[date].calculate_today_difference()
-    else:
-        total_portfolio[date].yesterday_total_assets = total_portfolio[date].total_assets
 
-        # print(f"这里的合约有:{total_portfolio[date].holdings['合约']}")
-        for contract_name in total_portfolio[date].holdings['合约编码']:
-            # 直接调用 update_holding 函数，这里data通过合约名字contract加入新的名字
-            data = {'合约编码': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约编码'].values[0],
-                    # '合约': contract_name,
-                    '合约名称': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约名称'].values[0],
-                    '成交数量': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '成交数量'].values[0],
-                    '收盘价': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '收盘价'].values[0],
-                    '合约乘数': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约乘数'].values[0]}
-            total_portfolio[date].update_holding(data)
+total_comm_var_diff,pnl_total,holding_diff = DailyPortfolio_Generator(tradingday, initial_cash, price_dict, trading_data)
 
-        total_portfolio[date].calculate_today_difference()
-    holding_diff = holding_diff.append({
-        '日期': date,
-        'slippage': total_portfolio[date].slippage,
-        'close_holding_value': total_portfolio[date].close_holding_value,
-        'actual_holding_value': total_portfolio[date].actual_holding_value
-    }, ignore_index=True)
-    # self.comm_var_diff = pd.concat([self.comm_var_diff, var_diff], ignore_index=True)
-    # total_portfolio[date].comm_var_diff = total_comm_var_diff
-    total_comm_var_diff = pd.concat([total_comm_var_diff, total_portfolio[date].comm_var_diff], ignore_index=True)
-    pnl_total = pd.concat([pnl_total, total_portfolio[date].pnl_df], ignore_index=True)
-    
-# pnl_total.to_csv('pnl_total.csv', encoding='gbk')
+
+pnl_total.to_csv('pnl_total_etf_option.csv', encoding='gbk')
 
 # pnl_group_df = pnl_total.groupby(['日期'],['合约'],['变化来源'], as_index=False).sum()
-# pnl_group_df = pnl_total.groupby(['合约名称','日期', '合约编码', '变化来源'], as_index=False)[['操作误差', '收益变化']].sum()
+pnl_group_df = pnl_total.groupby(['合约名称','日期', '合约编码', '变化来源'], as_index=False)[['操作误差', '收益变化']].sum()
 # pnl_group_df['手续费'] = -pnl_group_df['手续费']
 
 def extract_etf_name(contract_name):

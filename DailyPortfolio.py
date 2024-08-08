@@ -1,5 +1,7 @@
 from datetime import datetime
 import pandas as pd 
+import re
+from tqdm import tqdm
 
 class DailyPortfolio:
     def __init__(self, date, cash, history_price):
@@ -217,7 +219,7 @@ class DailyPortfolio:
         self.holdings = pd.concat([self.holdings, new_holding], ignore_index=True)
         self.today_selling = pd.concat([self.today_selling, new_holding], ignore_index=True)
         self.update_total_assets()
-        self.slippage += data['成交金额'] - total_value
+        self.slippage += data['成交金额'] - total_value   
     
     def update_holding(self, data):
         #这里的data变成了一个单个的合约名，而非带着这个名字的dataframe了
@@ -231,7 +233,7 @@ class DailyPortfolio:
                 history_df = self.history_price[contract_name]
                 old_value = self.holdings.at[idx, '收盘总价']
                 # Date变成tradeDate
-                price = history_df.loc[history_df['tradeDate'] == self.date, 'closePrice']                
+                price = history_df.loc[history_df['tradeDate'] == self.date, 'closePrice']               
                 self.holdings.at[idx, '收盘价'] = float(price.iloc[0])
                 self.holdings.at[idx, '收盘总价'] = self.holdings.at[idx, '成交数量'] * price * data['合约乘数']
                 value_difference = self.holdings.at[idx, '收盘总价'] - old_value
@@ -270,3 +272,87 @@ class DailyPortfolio:
                 f"{selling_info}"
                 f"\n持仓:\n{self.holdings}"
                 f"\n今日收益（不包含操作误差）: {round(self.difference,2)}, 今日操作误差汇总:{round(self.slippage,2)}")
+        
+
+def DailyPortfolio_Generator(tradingday, initial_cash, history_price, trading_data):
+    total_portfolio = {}
+    total_comm_var_diff = pd.DataFrame(columns = ['合约','操作误差'])
+    holding_diff = pd.DataFrame()
+    pnl_total = pd.DataFrame()
+    
+
+    for i, date in enumerate(tqdm(tradingday)):
+        # 检查是不是第一天，如果是的话创立一个空Daily Portfolio，如果不是则copy昨天的DailyPortfolio
+        if i == 0:
+            total_portfolio[date] = DailyPortfolio(date, initial_cash, history_price)
+        else:
+            previous_date = tradingday[i-1]
+            previous_portfolio = total_portfolio[previous_date]
+            new_portfolio = DailyPortfolio(date, previous_portfolio.cash, history_price)
+            new_portfolio.holdings = previous_portfolio.holdings.copy()
+            new_portfolio.total_assets = previous_portfolio.total_assets    
+            total_portfolio[date] = new_portfolio
+        # 检查该交易日有没有在trading_data中出现，如果有的话识别是买/卖，没有的话正常更新
+        if date in trading_data['成交日期'].values:
+            transcations = trading_data[trading_data['成交日期'] == date]
+            # 保存历史总资产
+            total_portfolio[date].yesterday_total_assets = total_portfolio[date].total_assets
+            for contract_name in total_portfolio[date].holdings['合约编码']:
+                # 直接调用 update_holding 函数，这里data通过合约名字contract加入新的名字
+                data = {'合约编码': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约编码'].values[0],
+                        #'合约': contract_name,
+                        '合约名称': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约名称'].values[0],
+                        '成交数量': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '成交数量'].values[0],
+                        '收盘价': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '收盘价'].values[0],
+                        '合约乘数': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约乘数'].values[0]}
+                total_portfolio[date].update_holding(data)    
+            # print(f"日期{date}的交易记录：\n{transcations}")
+            buy_sell_column = next((col for col in transcations.columns if re.match(r'买/?卖', col)), None)
+            for _, transcation in transcations.iterrows():
+                if '买' in transcation[buy_sell_column]:
+                    if re.search(r'开', transcation['开平']):
+                        total_portfolio[date].buy_holding_open(transcation)
+                    elif re.search(r'平', transcation['开平']):
+                        total_portfolio[date].buy_holding_close(transcation)
+                    else:
+                        raise Exception(f"未知的开平类型{transcation['开平']}")
+                elif '卖' in transcation[buy_sell_column]:
+                    if re.search(r'开', transcation['开平']):
+                        total_portfolio[date].sell_holding_open(transcation)
+                    elif re.search(r'平', transcation['开平']):
+                        total_portfolio[date].sell_holding_close(transcation)
+                    else:
+                        raise Exception(f"未知的开平类型{transcation['开平']}")
+                else:
+                    raise Exception(f"未知的买卖类型{transcation[buy_sell_column]}")
+            total_portfolio[date].calculate_today_difference()
+        else:
+            total_portfolio[date].yesterday_total_assets = total_portfolio[date].total_assets
+
+            # print(f"这里的合约有:{total_portfolio[date].holdings['合约']}")
+            for contract_name in total_portfolio[date].holdings['合约编码']:
+                # 直接调用 update_holding 函数，这里data通过合约名字contract加入新的名字
+                data = {'合约编码': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约编码'].values[0],
+                        # '合约': contract_name,
+                        '合约名称': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约名称'].values[0],
+                        '成交数量': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '成交数量'].values[0],
+                        '收盘价': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '收盘价'].values[0],
+                        '合约乘数': total_portfolio[date].holdings.loc[total_portfolio[date].holdings['合约编码'] == contract_name, '合约乘数'].values[0]}
+                total_portfolio[date].update_holding(data)
+
+            total_portfolio[date].calculate_today_difference()
+        holding_diff = holding_diff.append({
+            '日期': date,
+            'slippage': total_portfolio[date].slippage,
+            'close_holding_value': total_portfolio[date].close_holding_value,
+            'actual_holding_value': total_portfolio[date].actual_holding_value
+        }, ignore_index=True)
+        # self.comm_var_diff = pd.concat([self.comm_var_diff, var_diff], ignore_index=True)
+        # total_portfolio[date].comm_var_diff = total_comm_var_diff
+        total_comm_var_diff = pd.concat([total_comm_var_diff, total_portfolio[date].comm_var_diff], ignore_index=True)
+        pnl_total = pd.concat([pnl_total, total_portfolio[date].pnl_df], ignore_index=True)
+    return total_comm_var_diff,pnl_total,holding_diff
+
+    
+# def Building_DailyPortfolio(tradingday):
+# class DailyPortfolio
